@@ -7,6 +7,8 @@ import { queryClient } from "@/lib/queryClient";
 import { apiRequest } from "@/lib/queryClient";
 import SuccessModal from "@/components/SuccessModal";
 import { z } from "zod";
+import { loginWithGoogle, logoutUser, auth, createAuthListener } from "@/lib/firebase";
+import { FcGoogle } from "react-icons/fc";
 
 import {
   Form,
@@ -48,6 +50,7 @@ type FormValues = {
 
 export default function SubmitGroup() {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [linkPreview, setLinkPreview] = useState({
     title: "",
     image: "",
@@ -67,19 +70,66 @@ export default function SubmitGroup() {
     },
   });
 
+  // Set up auth listener
+  useEffect(() => {
+    const unsubscribe = createAuthListener((user) => {
+      setIsLoggedIn(!!user);
+      if (user && user.displayName) {
+        form.setValue('owner', user.displayName);
+      }
+    });
+    
+    // Cleanup on unmount
+    return () => unsubscribe();
+  }, [form]);
+
   // Watch the link field for changes
   const linkValue = form.watch("link");
   
   // Update link preview when link changes
   useEffect(() => {
-    if (linkValue && linkValue.includes("chat.whatsapp.com")) {
-      // In a real implementation, you might fetch metadata of the link
-      // For now, we'll use the link value to generate a preview
-      setLinkPreview({
-        title: "WhatsApp Group",
-        image: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/512px-WhatsApp.svg.png",
-        description: "Click to join this WhatsApp group"
-      });
+    async function fetchLinkMetadata() {
+      if (linkValue && linkValue.includes("chat.whatsapp.com")) {
+        try {
+          // WhatsApp doesn't expose full OG data for group invites, 
+          // so we'll use a conditional approach:
+          // First try to fetch metadata, fallback to default if not available
+          const response = await fetch(`/api/link-preview?url=${encodeURIComponent(linkValue)}`);
+          
+          if (!response.ok) {
+            throw new Error('Failed to fetch metadata');
+          }
+          
+          const data = await response.json();
+          
+          if (data && (data.title || data.image || data.description)) {
+            setLinkPreview({
+              title: data.title || "WhatsApp Group",
+              image: data.image || "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/512px-WhatsApp.svg.png",
+              description: data.description || "Click to join this WhatsApp group"
+            });
+          } else {
+            // Fallback to default preview if no metadata found
+            setLinkPreview({
+              title: "WhatsApp Group",
+              image: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/512px-WhatsApp.svg.png",
+              description: `Click to join this WhatsApp group: ${linkValue.split('/').pop()}`
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching link metadata:", error);
+          // Use default preview on error
+          setLinkPreview({
+            title: "WhatsApp Group",
+            image: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/WhatsApp.svg/512px-WhatsApp.svg.png",
+            description: `Click to join this WhatsApp group: ${linkValue.split('/').pop()}`
+          });
+        }
+      }
+    }
+    
+    if (linkValue) {
+      fetchLinkMetadata();
     }
   }, [linkValue]);
 
@@ -103,7 +153,43 @@ export default function SubmitGroup() {
   return (
     <>
       <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-2xl font-bold text-gray-800 mb-6">Submit Your WhatsApp Group</h2>
+        <h2 className="text-2xl font-bold text-gray-800 mb-4">Submit Your WhatsApp Group</h2>
+        
+        {/* Authentication prompt */}
+        <div className="mb-6 bg-gray-50 rounded-lg p-4 border border-gray-100">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-medium text-gray-900">
+                {isLoggedIn ? "You're signed in" : "Sign in to manage your groups"}
+              </h3>
+              <p className="text-sm text-gray-500">
+                {isLoggedIn 
+                  ? "You can submit and edit your WhatsApp groups" 
+                  : "Use your Google account to easily manage your submitted groups"}
+              </p>
+            </div>
+            {isLoggedIn ? (
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => logoutUser()}
+                className="flex items-center gap-2"
+              >
+                Sign out
+              </Button>
+            ) : (
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => loginWithGoogle()}
+                className="flex items-center gap-2"
+              >
+                <FcGoogle className="h-5 w-5" />
+                Sign in with Google
+              </Button>
+            )}
+          </div>
+        </div>
         
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
